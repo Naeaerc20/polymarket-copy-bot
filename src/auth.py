@@ -24,48 +24,6 @@ except ImportError:
     from py_clob_client.clob_types import ApiCreds
 
 
-@dataclass
-class PolymarketCredentials:
-    """Holds API credentials for L2 authentication"""
-    api_key: str
-    api_secret: str
-    api_passphrase: str
-    
-    def to_dict(self) -> Dict[str, str]:
-        """Convert to dict format expected by ClobClient"""
-        return {
-            "apiKey": self.api_key,
-            "secret": self.api_secret,
-            "passphrase": self.api_passphrase
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> "PolymarketCredentials":
-        """Create from stored dict (supports both naming conventions)"""
-        return cls(
-            api_key=data.get("api_key") or data.get("apiKey", ""),
-            api_secret=data.get("api_secret") or data.get("secret", ""),
-            api_passphrase=data.get("api_passphrase") or data.get("passphrase", "")
-        )
-    
-    @classmethod
-    def from_api_creds(cls, creds: ApiCreds) -> "PolymarketCredentials":
-        """Create from py_clob_client ApiCreds object"""
-        return cls(
-            api_key=creds.api_key,
-            api_secret=creds.api_secret,
-            api_passphrase=creds.api_passphrase
-        )
-    
-    def to_storage_dict(self) -> Dict[str, str]:
-        """Convert to dict for JSON storage"""
-        return {
-            "api_key": self.api_key,
-            "api_secret": self.api_secret,
-            "api_passphrase": self.api_passphrase
-        }
-
-
 class PolymarketAuth:
     """
     Handles Polymarket authentication (L1 and L2)
@@ -76,7 +34,7 @@ class PolymarketAuth:
     
     Signature Types:
     - 0: EOA (Externally Owned Account - MetaMask)
-    - 1: POLY_PROXY (Magic Link email/Google login) - MOST COMMON
+    - 1: POLY_PROXY (Magic Link email/Google login)
     - 2: GNOSIS_SAFE (Gnosis Safe multisig)
     """
     
@@ -89,7 +47,10 @@ class PolymarketAuth:
         private_key: str,
         funder_address: str,
         signature_type: int = 1,
-        creds_dir: str = "."
+        creds_dir: str = ".",
+        api_key: str = None,
+        api_secret: str = None,
+        api_passphrase: str = None
     ):
         """
         Initialize authentication handler
@@ -99,162 +60,143 @@ class PolymarketAuth:
             funder_address: Proxy wallet address (shown on Polymarket.com)
             signature_type: 0=EOA, 1=POLY_PROXY, 2=GNOSIS_SAFE
             creds_dir: Directory to store credentials
+            api_key: Pre-existing API key (from .env)
+            api_secret: Pre-existing API secret (from .env)
+            api_passphrase: Pre-existing API passphrase (from .env)
         """
-        # Ensure private key has 0x prefix
-        if not private_key.startswith("0x"):
-            private_key = "0x" + private_key
-        
-        self.private_key = private_key
-        self.funder_address = funder_address.lower() if funder_address else None
+        # Ensure proper format
+        self.private_key = private_key if private_key.startswith('0x') else '0x' + private_key
+        self.funder_address = funder_address if funder_address.startswith('0x') else '0x' + funder_address
         self.signature_type = signature_type
         self.creds_dir = Path(creds_dir)
         self.creds_file = self.creds_dir / self.CREDENTIALS_FILE
         
+        # Pre-existing credentials from .env
+        self.pre_existing_creds = None
+        if api_key and api_secret and api_passphrase:
+            self.pre_existing_creds = ApiCreds(
+                api_key=api_key,
+                api_secret=api_secret,
+                api_passphrase=api_passphrase
+            )
+        
         self._client: Optional[ClobClient] = None
-        self._credentials: Optional[PolymarketCredentials] = None
+        self._credentials: Optional[ApiCreds] = None
     
-    def _load_credentials(self) -> Optional[PolymarketCredentials]:
+    def _load_credentials(self) -> Optional[ApiCreds]:
         """Load credentials from file if they exist"""
         if self.creds_file.exists():
             try:
                 with open(self.creds_file, "r") as f:
                     data = json.load(f)
-                return PolymarketCredentials.from_dict(data)
+                return ApiCreds(
+                    api_key=data.get("api_key", data.get("apiKey", "")),
+                    api_secret=data.get("api_secret", data.get("secret", "")),
+                    api_passphrase=data.get("api_passphrase", data.get("passphrase", ""))
+                )
             except Exception as e:
                 print(f"Warning: Could not load credentials: {e}")
         return None
     
-    def _save_credentials(self, creds: PolymarketCredentials) -> None:
+    def _save_credentials(self, creds: ApiCreds) -> None:
         """Save credentials to file"""
         self.creds_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "api_key": creds.api_key,
+            "api_secret": creds.api_secret,
+            "api_passphrase": creds.api_passphrase,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
         with open(self.creds_file, "w") as f:
-            json.dump(creds.to_storage_dict(), f, indent=2)
+            json.dump(data, f, indent=2)
         # Set restrictive permissions
         os.chmod(self.creds_file, 0o600)
     
-    def _create_l1_client(self) -> ClobClient:
-        """Create ClobClient configured for L1 authentication (create/derive creds)"""
-        return ClobClient(
+    def get_credentials(self) -> ApiCreds:
+        """
+        Get API credentials, creating if necessary
+        
+        Priority:
+        1. Pre-existing credentials from .env (POLY_API_KEY, etc.)
+        2. Stored credentials from credentials.json
+        3. Derive from Polymarket using L1 auth
+        
+        Returns:
+            ApiCreds object with api_key, api_secret, api_passphrase
+        """
+        # 1. Use pre-existing from .env
+        if self.pre_existing_creds:
+            print("Using API credentials from .env")
+            self._credentials = self.pre_existing_creds
+            return self._credentials
+        
+        # 2. Try stored credentials
+        stored = self._load_credentials()
+        if stored:
+            print("Using stored credentials from credentials.json")
+            self._credentials = stored
+            return self._credentials
+        
+        # 3. Derive from Polymarket
+        print("Deriving API credentials from Polymarket...")
+        return self.derive_credentials()
+    
+    def derive_credentials(self) -> ApiCreds:
+        """Derive API credentials from Polymarket using L1 auth"""
+        client = ClobClient(
             host=self.CLOB_HOST,
             key=self.private_key,
             chain_id=self.CHAIN_ID,
             signature_type=self.signature_type,
             funder=self.funder_address
         )
-    
-    def create_credentials(self) -> PolymarketCredentials:
-        """
-        Create NEW API credentials using L1 authentication
         
-        Use this if you've never generated API keys before.
-        """
-        print("Creating new API credentials...")
-        client = self._create_l1_client()
-        
-        creds: ApiCreds = client.create_api_key()
-        
-        credentials = PolymarketCredentials.from_api_creds(creds)
-        self._save_credentials(credentials)
-        self._credentials = credentials
-        
-        return credentials
-    
-    def derive_credentials(self) -> PolymarketCredentials:
-        """
-        Derive EXISTING API credentials using L1 authentication
-        
-        Use this if you've already created API keys before.
-        """
-        print("Deriving existing API credentials...")
-        client = self._create_l1_client()
-        
-        creds: ApiCreds = client.derive_api_key()
-        
-        credentials = PolymarketCredentials.from_api_creds(creds)
-        self._save_credentials(credentials)
-        self._credentials = credentials
-        
-        return credentials
-    
-    def create_or_derive_credentials(self) -> PolymarketCredentials:
-        """
-        Create new or derive existing API credentials using L1 authentication
-        
-        This automatically tries to derive first (for existing users),
-        and falls back to creating new credentials if needed.
-        
-        Returns:
-            PolymarketCredentials object with api_key, api_secret, api_passphrase
-        """
-        # Try to load existing credentials from file
-        existing = self._load_credentials()
-        if existing:
-            print("Found stored credentials, verifying...")
+        # Try create_or_derive first (handles both cases)
+        if hasattr(client, 'create_or_derive_api_creds'):
+            creds = client.create_or_derive_api_creds()
+        else:
+            # Try derive first, then create
             try:
-                # Verify they work by getting server time
-                client = self.get_trading_client(existing)
-                server_time = client.get_server_time()
-                print(f"✓ Stored credentials valid. Server time: {server_time}")
-                self._credentials = existing
-                return existing
-            except Exception as e:
-                print(f"Stored credentials invalid: {e}")
-                print("Attempting to derive fresh credentials...")
+                creds = client.derive_api_key()
+                print("Derived existing API credentials")
+            except Exception:
+                creds = client.create_api_key()
+                print("Created new API credentials")
         
-        # Try to create or derive from the API
-        client = self._create_l1_client()
-        
-        try:
-            # This method handles both create and derive automatically
-            creds: ApiCreds = client.create_or_derive_api_creds()
-            
-            credentials = PolymarketCredentials.from_api_creds(creds)
-            self._save_credentials(credentials)
-            self._credentials = credentials
-            
-            print("✓ Credentials created/derived successfully")
-            return credentials
-            
-        except Exception as e:
-            error_msg = str(e).lower()
-            
-            # If create fails, try derive
-            if "could not create" in error_msg or "already" in error_msg:
-                print(f"Create failed ({e}), trying to derive...")
-                try:
-                    creds: ApiCreds = client.derive_api_key()
-                    credentials = PolymarketCredentials.from_api_creds(creds)
-                    self._save_credentials(credentials)
-                    self._credentials = credentials
-                    print("✓ Credentials derived successfully")
-                    return credentials
-                except Exception as e2:
-                    print(f"Derive also failed: {e2}")
-                    raise
-            
-            raise
+        self._save_credentials(creds)
+        self._credentials = creds
+        return creds
     
-    def get_trading_client(self, credentials: Optional[PolymarketCredentials] = None) -> ClobClient:
-        """
-        Get authenticated CLOB client for trading operations
-        
-        Args:
-            credentials: Optional credentials object. If None, uses stored credentials.
-        
-        Returns:
-            ClobClient instance ready for L2 operations
-        """
-        if credentials is None:
-            credentials = self._credentials or self.create_or_derive_credentials()
-        
-        self._credentials = credentials
-        
-        # Create client with L2 credentials for trading
+    def create_credentials(self) -> ApiCreds:
+        """Create new API credentials (forces new creation)"""
         client = ClobClient(
             host=self.CLOB_HOST,
             key=self.private_key,
             chain_id=self.CHAIN_ID,
-            creds=credentials.to_dict(),
+            signature_type=self.signature_type,
+            funder=self.funder_address
+        )
+        
+        creds = client.create_api_key()
+        self._save_credentials(creds)
+        self._credentials = creds
+        return creds
+    
+    def get_trading_client(self) -> ClobClient:
+        """
+        Get authenticated CLOB client for trading operations
+        
+        Returns:
+            ClobClient instance ready for L2 operations
+        """
+        creds = self._credentials or self.get_credentials()
+        
+        # Create client with L2 credentials
+        client = ClobClient(
+            host=self.CLOB_HOST,
+            key=self.private_key,
+            chain_id=self.CHAIN_ID,
+            creds=creds,
             signature_type=self.signature_type,
             funder=self.funder_address
         )
@@ -275,7 +217,6 @@ class PolymarketAuth:
         """Verify the connection and credentials are working"""
         try:
             client = self.get_trading_client()
-            # Try to get server time as a simple test
             server_time = client.get_server_time()
             print(f"✓ Connected to CLOB. Server time: {server_time}")
             return True
@@ -291,10 +232,10 @@ class PolymarketAuth:
         return self._client
     
     @property
-    def credentials(self) -> PolymarketCredentials:
+    def credentials(self) -> ApiCreds:
         """Get current credentials"""
         if self._credentials is None:
-            self._credentials = self.create_or_derive_credentials()
+            self._credentials = self.get_credentials()
         return self._credentials
 
 
@@ -304,28 +245,38 @@ def setup_auth_from_env() -> PolymarketAuth:
     
     Required env vars:
     - PRIVATE_KEY: Wallet private key
-    - FUNDER_ADDRESS: Proxy wallet address (for POLY_PROXY accounts)
-    - SIGNATURE_TYPE: 0, 1, or 2 (default: 1 for POLY_PROXY)
+    - FUNDER_ADDRESS: Proxy wallet address
+    - SIGNATURE_TYPE: 0, 1, or 2
+    
+    Optional env vars (if provided, skip derivation):
+    - POLY_API_KEY: API key
+    - POLY_API_SECRET: API secret
+    - POLY_API_PASSPHRASE: API passphrase
     """
     from dotenv import load_dotenv
     load_dotenv()
     
     private_key = os.getenv("PRIVATE_KEY")
-    funder_address = os.getenv("FUNDER_ADDRESS", "")
+    funder_address = os.getenv("FUNDER_ADDRESS")
     signature_type = int(os.getenv("SIGNATURE_TYPE", "1"))
     
-    if not private_key:
-        raise ValueError("PRIVATE_KEY not set in environment")
+    # Optional pre-existing credentials
+    api_key = os.getenv("POLY_API_KEY")
+    api_secret = os.getenv("POLY_API_SECRET")
+    api_passphrase = os.getenv("POLY_API_PASSPHRASE")
     
-    # For POLY_PROXY (type 1), funder_address is required
-    if signature_type == 1 and not funder_address:
-        print("WARNING: FUNDER_ADDRESS not set. This is required for POLY_PROXY accounts.")
-        print("Your funder address is the proxy wallet address shown on Polymarket.com")
+    if not private_key:
+        raise ValueError("PRIVATE_KEY not set in environment. Run setup.py first!")
+    if not funder_address:
+        raise ValueError("FUNDER_ADDRESS not set in environment. Run setup.py first!")
     
     return PolymarketAuth(
         private_key=private_key,
         funder_address=funder_address,
-        signature_type=signature_type
+        signature_type=signature_type,
+        api_key=api_key,
+        api_secret=api_secret,
+        api_passphrase=api_passphrase
     )
 
 
@@ -337,14 +288,14 @@ if __name__ == "__main__":
     print("Polymarket Authentication Test")
     print("=" * 50)
     
-    print(f"\nFunder Address: {auth.funder_address or 'Not set'}")
+    print(f"\nFunder Address: {auth.funder_address}")
     print(f"Signature Type: {auth.signature_type}")
     
-    print("\nCreating/deriving credentials...")
-    creds = auth.create_or_derive_credentials()
+    print("\nGetting credentials...")
+    creds = auth.get_credentials()
     print(f"API Key: {creds.api_key[:16]}...")
-    print(f"API Secret: {creds.api_secret[:16]}...")
-    print(f"API Passphrase: {creds.api_passphrase[:16]}...")
+    print(f"API Secret: {creds.api_secret[:8]}...")
+    print(f"Passphrase: {creds.api_passphrase[:8]}...")
     
     print("\nVerifying connection...")
     if auth.verify_connection():
