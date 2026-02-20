@@ -258,14 +258,18 @@ class OrderExecutor:
             tick = float(tick_size)
             price = round(price / tick) * tick
             price = max(tick, min(price, 1.0 - tick))
+            price = round(price, 2)  # Round to 2 decimals for price
             
             # Calculate size in tokens
             size_tokens = copy_size / price
             
+            # Round size to 2 decimals (Polymarket requirement)
+            size_tokens = round(size_tokens, 2)
+            
             print(f"[Executor] Order params:")
             print(f"  Token ID: {token_id}")
-            print(f"  Price: {price:.4f}")
-            print(f"  Size: {size_tokens:.4f} tokens (~${copy_size:.2f})")
+            print(f"  Price: {price:.2f}")
+            print(f"  Size: {size_tokens:.2f} tokens (~${copy_size:.2f})")
             print(f"  Side: {side}")
             print(f"  Order Type: {order_type}")
             
