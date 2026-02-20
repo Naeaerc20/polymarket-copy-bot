@@ -23,7 +23,7 @@ except ImportError:
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
 
-from auth import PolymarketAuth, PolymarketCredentials
+from auth import PolymarketAuth
 from trader_monitor import Trade, TraderConfig, GammaAPIClient
 
 
@@ -314,17 +314,17 @@ class OrderExecutor:
                 result["order_id"] = order_id
                 self.executed_trades.append(result)
                 
-                print(f"[Executor] ✓ Order placed successfully!")
+                print(f"[Executor] Order placed successfully!")
                 print(f"  Order ID: {order_id}")
             else:
                 result["error"] = "No response from API"
                 self.failed_trades.append(result)
-                print(f"[Executor] ✗ No response from API")
+                print(f"[Executor] No response from API")
             
         except Exception as e:
             result["error"] = str(e)
             self.failed_trades.append(result)
-            print(f"[Executor] ✗ Error executing trade: {e}")
+            print(f"[Executor] Error executing trade: {e}")
             import traceback
             traceback.print_exc()
         
@@ -342,7 +342,7 @@ class OrderExecutor:
         """Cancel all open orders"""
         try:
             self.client.cancel_all()
-            print("[Executor] ✓ Cancelled all orders")
+            print("[Executor] Cancelled all orders")
             return True
         except Exception as e:
             print(f"[Executor] Error cancelling orders: {e}")

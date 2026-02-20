@@ -12,10 +12,7 @@ import time
 from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-import aiohttp
 import requests
-
-from auth import PolymarketCredentials
 
 
 @dataclass

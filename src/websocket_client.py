@@ -15,8 +15,6 @@ from typing import Optional, Callable, Dict, Any, List, Set
 from dataclasses import dataclass
 import websockets
 
-from auth import PolymarketCredentials
-
 
 @dataclass
 class WSMessage:
@@ -58,7 +56,9 @@ class PolymarketWebSocket:
     
     def __init__(
         self,
-        credentials: Optional[PolymarketCredentials] = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        api_passphrase: Optional[str] = None,
         on_message: Optional[Callable[[WSMessage], None]] = None,
         on_connect: Optional[Callable[[], None]] = None,
         on_disconnect: Optional[Callable[[], None]] = None
@@ -67,12 +67,16 @@ class PolymarketWebSocket:
         Initialize WebSocket client
         
         Args:
-            credentials: API credentials for user channel
+            api_key: API key for user channel
+            api_secret: API secret for user channel
+            api_passphrase: API passphrase for user channel
             on_message: Callback for incoming messages
             on_connect: Callback when connected
             on_disconnect: Callback when disconnected
         """
-        self.credentials = credentials
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.api_passphrase = api_passphrase
         self.on_message = on_message
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
@@ -83,25 +87,30 @@ class PolymarketWebSocket:
         self._subscribed_markets: Set[str] = set()
         self._last_ping = 0.0
     
+    @property
+    def has_credentials(self) -> bool:
+        """Check if credentials are available"""
+        return all([self.api_key, self.api_secret, self.api_passphrase])
+    
     async def connect_market_channel(self) -> None:
         """Connect to market data WebSocket"""
-        print(f"[WS] Connecting to market channel...")
+        print("[WS] Connecting to market channel...")
         self._ws = await websockets.connect(self.MARKET_WS_URL)
         self._running = True
-        print(f"[WS] Connected to market channel")
+        print("[WS] Connected to market channel")
         
         if self.on_connect:
             self.on_connect()
     
     async def connect_user_channel(self) -> None:
         """Connect to user WebSocket (requires authentication)"""
-        if not self.credentials:
+        if not self.has_credentials:
             raise ValueError("Credentials required for user channel")
         
-        print(f"[WS] Connecting to user channel...")
+        print("[WS] Connecting to user channel...")
         self._ws = await websockets.connect(self.USER_WS_URL)
         self._running = True
-        print(f"[WS] Connected to user channel")
+        print("[WS] Connected to user channel")
         
         if self.on_connect:
             self.on_connect()
@@ -140,11 +149,14 @@ class PolymarketWebSocket:
         Args:
             markets: List of condition IDs to filter (optional)
         """
+        if not self.has_credentials:
+            raise ValueError("Credentials required for user channel")
+        
         message = {
             "auth": {
-                "apiKey": self.credentials.api_key,
-                "secret": self.credentials.secret,
-                "passphrase": self.credentials.passphrase
+                "apiKey": self.api_key,
+                "secret": self.api_secret,
+                "passphrase": self.api_passphrase
             },
             "type": "user"
         }
@@ -154,7 +166,7 @@ class PolymarketWebSocket:
             self._subscribed_markets.update(markets)
         
         await self._send(message)
-        print(f"[WS] Subscribed to user channel")
+        print("[WS] Subscribed to user channel")
     
     async def unsubscribe_assets(self, asset_ids: List[str]) -> None:
         """Unsubscribe from specific assets"""
@@ -234,9 +246,8 @@ class PolymarketWebSocket:
         
         while True:
             try:
-                async with websockets.connect(
-                    self.MARKET_WS_URL if not self.credentials else self.USER_WS_URL
-                ) as ws:
+                ws_url = self.USER_WS_URL if self.has_credentials else self.MARKET_WS_URL
+                async with websockets.connect(ws_url) as ws:
                     self._ws = ws
                     self._running = True
                     retry_delay = 1  # Reset retry delay on successful connection
