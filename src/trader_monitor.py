@@ -23,7 +23,7 @@ class Trade:
     """Represents a trade on Polymarket"""
     trader_address: str
     condition_id: str
-    asset_id: str
+    asset_id: str  # This IS the token_id!
     side: str  # BUY or SELL
     size: float
     price: float
@@ -35,17 +35,25 @@ class Trade:
     slug: str
     transaction_hash: Optional[str] = None
     
+    @property
+    def token_id(self) -> str:
+        """Token ID is the same as asset_id"""
+        return self.asset_id
+    
     @classmethod
     def from_api_response(cls, data: Dict[str, Any]) -> "Trade":
         """Create Trade from API response"""
+        size = float(data.get("size", 0))
+        price = float(data.get("price", 0))
+        
         return cls(
             trader_address=data.get("proxyWallet", ""),
             condition_id=data.get("conditionId", ""),
-            asset_id=data.get("asset", ""),
+            asset_id=data.get("asset", ""),  # This IS the token_id
             side=data.get("side", "BUY"),
-            size=float(data.get("size", 0)),
-            price=float(data.get("price", 0)),
-            usdc_size=float(data.get("usdcSize", data.get("size", 0) * data.get("price", 1))),
+            size=size,
+            price=price,
+            usdc_size=size * price,
             timestamp=data.get("timestamp", 0),
             outcome=data.get("outcome", ""),
             outcome_index=data.get("outcomeIndex", 0),
@@ -197,13 +205,17 @@ class GammaAPIClient:
     
     def get_market_by_condition_id(self, condition_id: str) -> Optional[Dict[str, Any]]:
         """Get market by condition ID"""
-        response = self.session.get(
-            f"{self.BASE_URL}/markets",
-            params={"condition_id": condition_id}
-        )
-        response.raise_for_status()
-        markets = response.json()
-        return markets[0] if markets else None
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}/markets",
+                params={"condition_id": condition_id}
+            )
+            response.raise_for_status()
+            markets = response.json()
+            return markets[0] if markets else None
+        except Exception as e:
+            print(f"[Gamma] Error getting market: {e}")
+            return None
     
     def get_market_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         """Get market by slug"""
@@ -227,14 +239,18 @@ class GammaAPIClient:
                 return token
         
         return None
+    
+    def get_market_info(self, condition_id: str) -> Optional[Dict[str, Any]]:
+        """Get market info including tick size and neg_risk flag"""
+        return self.get_market_by_condition_id(condition_id)
 
 
 class TraderMonitor:
     """
-    Monitors trader activity and detects new trades
+    Monitors trader activity and detects NEW trades only
     
     Uses polling (Data API) for reliable detection.
-    Can optionally use WebSocket for real-time updates.
+    Only detects trades that occur AFTER the bot starts.
     """
     
     def __init__(
@@ -259,7 +275,8 @@ class TraderMonitor:
         self.gamma_api = GammaAPIClient()
         
         self._running = False
-        self._seen_trades: Dict[str, set] = {}  # address -> set of seen trade hashes
+        self._seen_transactions: Dict[str, set] = {}  # address -> set of seen tx hashes
+        self._bot_start_time: int = 0  # Timestamp when bot started
     
     def add_trader(self, trader: TraderConfig) -> None:
         """Add a trader to monitor"""
@@ -279,45 +296,11 @@ class TraderMonitor:
         if addr_lower in self.traders:
             self.traders[addr_lower].last_known_trade_ts = trade_ts
     
-    def _get_trade_hash(self, trade: Dict[str, Any]) -> str:
-        """Create unique hash for a trade"""
-        return f"{trade.get('timestamp', 0)}_{trade.get('conditionId', '')}_{trade.get('side', '')}_{trade.get('size', 0)}"
-    
     def _initialize_trader_state(self, address: str) -> None:
-        """Initialize state for a trader by fetching their latest trades"""
-        try:
-            activity = self.data_api.get_user_activity(
-                user_address=address,
-                limit=10,
-                activity_type="TRADE"
-            )
-            
-            if address.lower() not in self._seen_trades:
-                self._seen_trades[address.lower()] = set()
-            
-            for act in activity:
-                trade_hash = self._get_trade_hash(act)
-                self._seen_trades[address.lower()].add(trade_hash)
-            
-            # Update last known timestamp
-            if activity:
-                latest_ts = max(a.get("timestamp", 0) for a in activity)
-                self.update_trader_state(address, latest_ts)
-            
-            print(f"[Monitor] Initialized state for {address[:10]}... ({len(activity)} recent trades)")
-            
-        except Exception as e:
-            print(f"[Monitor] Error initializing {address[:10]}...: {e}")
-    
-    def check_trader_activity(self, address: str) -> List[Trade]:
         """
-        Check for new activity from a trader
-        
-        Returns:
-            List of new trades (empty if none)
+        Initialize state for a trader.
+        Mark all EXISTING trades as seen so we only detect NEW ones.
         """
-        new_trades = []
-        
         try:
             activity = self.data_api.get_user_activity(
                 user_address=address,
@@ -325,17 +308,65 @@ class TraderMonitor:
                 activity_type="TRADE"
             )
             
-            if address.lower() not in self._seen_trades:
-                self._seen_trades[address.lower()] = set()
+            if address.lower() not in self._seen_transactions:
+                self._seen_transactions[address.lower()] = set()
+            
+            # Mark ALL existing trades as seen
+            for act in activity:
+                tx_hash = act.get("transactionHash", "")
+                if tx_hash:
+                    self._seen_transactions[address.lower()].add(tx_hash)
+            
+            # Update last known timestamp from existing trades
+            if activity:
+                latest_ts = max(a.get("timestamp", 0) for a in activity)
+                self.update_trader_state(address, latest_ts)
+                print(f"[Monitor] Initialized {address[:10]}... - {len(activity)} existing trades marked as seen")
+            else:
+                print(f"[Monitor] Initialized {address[:10]}... - No existing trades")
+            
+        except Exception as e:
+            print(f"[Monitor] Error initializing {address[:10]}...: {e}")
+    
+    def check_trader_activity(self, address: str) -> List[Trade]:
+        """
+        Check for NEW activity from a trader (only trades after bot start)
+        
+        Returns:
+            List of new trades (empty if none)
+        """
+        new_trades = []
+        
+        try:
+            # Get recent activity
+            activity = self.data_api.get_user_activity(
+                user_address=address,
+                limit=50,
+                activity_type="TRADE"
+            )
+            
+            if address.lower() not in self._seen_transactions:
+                self._seen_transactions[address.lower()] = set()
             
             for act in activity:
-                trade_hash = self._get_trade_hash(act)
+                tx_hash = act.get("transactionHash", "")
+                trade_ts = act.get("timestamp", 0)
                 
-                if trade_hash not in self._seen_trades[address.lower()]:
-                    # New trade!
-                    trade = Trade.from_api_response(act)
-                    new_trades.append(trade)
-                    self._seen_trades[address.lower()].add(trade_hash)
+                # Skip if already seen
+                if tx_hash and tx_hash in self._seen_transactions[address.lower()]:
+                    continue
+                
+                # Skip if trade happened before bot started
+                if trade_ts < self._bot_start_time:
+                    continue
+                
+                # This is a NEW trade!
+                trade = Trade.from_api_response(act)
+                new_trades.append(trade)
+                
+                # Mark as seen
+                if tx_hash:
+                    self._seen_transactions[address.lower()].add(tx_hash)
             
             if new_trades:
                 # Sort by timestamp (oldest first for proper order)
@@ -371,14 +402,19 @@ class TraderMonitor:
     async def run_async(self) -> None:
         """Run the monitor loop asynchronously"""
         self._running = True
+        self._bot_start_time = int(time.time())  # Record when bot started
         
         print(f"[Monitor] Starting to monitor {len(self.traders)} traders...")
+        print(f"[Monitor] Bot start time: {datetime.fromtimestamp(self._bot_start_time).strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[Monitor] Only trades AFTER this time will be copied!")
         
-        # Initialize state for all traders
+        # Initialize state for all traders (mark existing trades as seen)
+        print(f"[Monitor] Initializing trader states...")
         for address in self.traders:
             self._initialize_trader_state(address)
         
-        print(f"[Monitor] Initialization complete. Starting poll loop...")
+        print(f"[Monitor] Initialization complete. Watching for NEW trades...")
+        print(f"[Monitor] Poll interval: {self.poll_interval}s")
         
         while self._running:
             try:
@@ -390,6 +426,7 @@ class TraderMonitor:
                     print(f"  Trader: {trader.nickname or trade.trader_address[:10]}...")
                     print(f"  Time: {ts_str}")
                     print(f"  {trade}")
+                    print(f"  Token ID: {trade.token_id}")
                     
                     if self.on_trade_callback:
                         try:
@@ -435,6 +472,7 @@ if __name__ == "__main__":
     
     def on_new_trade(trade: Trade, trader: TraderConfig):
         print(f"  -> Would copy this trade!")
+        print(f"  -> Token ID: {trade.token_id}")
     
     monitor = TraderMonitor(
         traders=traders,

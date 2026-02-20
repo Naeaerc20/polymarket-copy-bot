@@ -40,7 +40,7 @@ class CopyTradeConfig:
     percentage_to_copy: Optional[float] = 100.0  # Percentage or None for fixed
     copy_sell: bool = True                  # Copy sell orders
     order_type: str = "FOK"                 # FOK or FAK
-    min_trade_size: float = 10.0           # Minimum USDC to copy
+    min_trade_size: float = 1.0            # Minimum USDC to copy
     max_trade_size: float = 1000.0         # Maximum USDC to copy
     
     @classmethod
@@ -58,7 +58,7 @@ class CopyTradeConfig:
             percentage_to_copy=percentage,
             copy_sell=os.getenv("COPY_SELL", "true").lower() == "true",
             order_type=os.getenv("TYPE_ORDER", "FOK").upper(),
-            min_trade_size=float(os.getenv("MIN_TRADE_SIZE", "10")),
+            min_trade_size=float(os.getenv("MIN_TRADE_SIZE", "1")),
             max_trade_size=float(os.getenv("MAX_TRADE_SIZE", "1000"))
         )
     
@@ -166,26 +166,6 @@ class OrderExecutor:
         
         return size, reason
     
-    def get_token_id(
-        self,
-        condition_id: str,
-        outcome_index: int
-    ) -> Optional[str]:
-        """
-        Get the token ID for a market outcome
-        
-        Args:
-            condition_id: Market condition ID
-            outcome_index: Outcome index (0 or 1)
-        """
-        try:
-            token_info = self.gamma_api.get_token_info(condition_id, outcome_index)
-            if token_info:
-                return token_info.get("token_id")
-        except Exception as e:
-            print(f"[Executor] Error getting token ID: {e}")
-        return None
-    
     def get_market_info(self, condition_id: str) -> Optional[Dict[str, Any]]:
         """Get market info including tick size and neg_risk flag"""
         try:
@@ -232,6 +212,16 @@ class OrderExecutor:
             print(f"[Executor] Copying trade: {reason}")
             print(f"  Original: {original_trade}")
             
+            # Get token ID directly from trade (asset_id IS the token_id)
+            token_id = original_trade.token_id
+            
+            if not token_id:
+                result["error"] = "No token ID in trade data"
+                print(f"[Executor] Error: {result['error']}")
+                return result
+            
+            print(f"[Executor] Token ID: {token_id}")
+            
             # Dry run check
             if self.dry_run:
                 print(f"[Executor] DRY RUN - Would execute trade")
@@ -239,69 +229,71 @@ class OrderExecutor:
                 result["order_id"] = "DRY_RUN"
                 return result
             
-            # Get token ID
-            token_id = self.get_token_id(
-                original_trade.condition_id,
-                original_trade.outcome_index
-            )
-            
-            if not token_id:
-                result["error"] = "Could not get token ID"
-                print(f"[Executor] Error: {result['error']}")
-                return result
-            
             # Get market info for tick size and neg_risk
             market_info = self.get_market_info(original_trade.condition_id)
-            if not market_info:
-                result["error"] = "Could not get market info"
-                return result
+            neg_risk = False
+            tick_size = "0.01"
             
-            tick_size = market_info.get("minimum_tick_size", "0.01")
-            neg_risk = market_info.get("neg_risk", False)
+            if market_info:
+                tick_size = market_info.get("minimum_tick_size", "0.01")
+                neg_risk = market_info.get("neg_risk", False)
+                print(f"[Executor] Market info: tick_size={tick_size}, neg_risk={neg_risk}")
             
             # Calculate order parameters
-            # For market orders (FAK), price = 1 for BUY, price = 0.01 for SELL
-            # For limit orders (FOK), use the original trade's price or current market price
-            
             order_type = self.copy_config.order_type
             side = original_trade.side
             
-            # Get current market price
-            try:
-                current_price = original_trade.price
-            except:
-                current_price = 0.5
+            # Get current price from original trade
+            current_price = original_trade.price
             
             # Adjust price based on side for better fill
             if side == "BUY":
-                price = min(current_price + 0.01, 0.99)  # Pay slightly more for better fill
+                # For buys, pay slightly more to ensure fill
+                price = min(current_price + 0.01, 0.99)
             else:
-                price = max(current_price - 0.01, 0.01)  # Sell slightly lower
+                # For sells, accept slightly less
+                price = max(current_price - 0.01, 0.01)
             
-            # Calculate size in tokens (not USDC)
-            # size = usdc_amount / price
+            # Round price to tick size
+            tick = float(tick_size)
+            price = round(price / tick) * tick
+            price = max(tick, min(price, 1.0 - tick))
+            
+            # Calculate size in tokens
             size_tokens = copy_size / price
             
             print(f"[Executor] Order params:")
             print(f"  Token ID: {token_id}")
             print(f"  Price: {price:.4f}")
-            print(f"  Size: {size_tokens:.2f} tokens (~${copy_size:.2f})")
+            print(f"  Size: {size_tokens:.4f} tokens (~${copy_size:.2f})")
             print(f"  Side: {side}")
             print(f"  Order Type: {order_type}")
             
             # Create and post order
             if order_type == "FAK":
                 # Market order (Fill and Kill)
-                order_args = MarketOrderArgs(
-                    token_id=token_id,
-                    amount=copy_size,  # USDC amount for market orders
-                    side=side,
-                    price=price,
-                    fee_rate_bps=0  # Will be set by API
-                )
-                
-                signed_order = self.client.create_market_order(order_args)
-                response = self.client.post_order(signed_order, OrderType.FAK)
+                try:
+                    order_args = MarketOrderArgs(
+                        token_id=token_id,
+                        amount=copy_size,  # USDC amount for market orders
+                        side=side,
+                        price=price,
+                        fee_rate_bps=0
+                    )
+                    
+                    signed_order = self.client.create_market_order(order_args)
+                    response = self.client.post_order(signed_order, OrderType.FAK)
+                except Exception as e:
+                    print(f"[Executor] FAK failed, trying GTC: {e}")
+                    # Fallback to GTC order
+                    order_args = OrderArgs(
+                        token_id=token_id,
+                        price=price,
+                        size=size_tokens,
+                        side=side
+                    )
+                    signed_order = self.client.create_order(order_args)
+                    response = self.client.post_order(signed_order, OrderType.GTC)
                 
             else:
                 # Limit order (Fill or Kill)
@@ -386,7 +378,7 @@ def test_executor():
     fake_trade = Trade(
         trader_address="0x1234...",
         condition_id="0xtest",
-        asset_id="test-token",
+        asset_id="123456789",  # This IS the token_id
         side="BUY",
         size=100,
         price=0.55,
