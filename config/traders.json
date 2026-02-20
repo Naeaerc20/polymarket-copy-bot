@@ -1,19 +1,19 @@
 {
   "traders": [
     {
-      "address": "0x1234567890abcdef1234567890abcdef12345678",
-      "nickname": "ExampleTrader1",
+      "address": "0xdf4cafe4564fe284bbadb56f1b8fbe8c80f4cb89",
+      "nickname": "6yyss",
       "enabled": true,
       "copy_buys": true,
       "copy_sells": true,
       "max_position_size": 500,
-      "notes": "Top performing trader - copy all trades"
+      "notes": "Top Trader in BTC-UP-DOWN EVERY 5 MINS"
     },
     {
       "address": "0xabcdef1234567890abcdef1234567890abcdef12",
       "nickname": "ExampleTrader2",
-      "enabled": true,
-      "copy_buys": true,
+      "enabled": false,
+      "copy_buys": false,
       "copy_sells": false,
       "max_position_size": 200,
       "notes": "Only copy buy orders"

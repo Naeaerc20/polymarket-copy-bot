@@ -248,83 +248,92 @@ class OrderExecutor:
             
             # Adjust price based on side for better fill
             if side == "BUY":
-                # For buys, pay slightly more to ensure fill
                 price = min(current_price + 0.01, 0.99)
             else:
-                # For sells, accept slightly less
                 price = max(current_price - 0.01, 0.01)
             
             # Round price to tick size
             tick = float(tick_size)
             price = round(price / tick) * tick
             price = max(tick, min(price, 1.0 - tick))
-            
-            # For FOK orders, we need to be careful with decimals:
-            # - Maker amount (size): max 2 decimals
-            # - Taker amount (size * price): max 5 decimals
-            # Solution: Use Decimal for precise rounding
-            
-            from decimal import Decimal, ROUND_DOWN
-            
-            # Convert to Decimal for precise arithmetic
-            price_decimal = Decimal(str(price)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
-            copy_size_decimal = Decimal(str(copy_size)).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
-            
-            # Calculate size: must be max 2 decimals
-            size_decimal = (copy_size_decimal / price_decimal).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
-            
-            # Convert back to float for the SDK
-            price = float(price_decimal)
-            size_tokens = float(size_decimal)
-            
-            # Verify taker amount (size * price) has max 5 decimals
-            taker_amount = size_decimal * price_decimal
-            taker_amount = float(taker_amount.quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
-            
+
+            # ---------------------------------------------------------------
+            # Polymarket decimal rules (enforced by the API):
+            #   maker_amount (token size) → max 2 decimal places
+            #   taker_amount (USDC cost)  → max 5 decimal places
+            #
+            # Strategy:
+            #   1. Round size DOWN to 2 dp  → guarantees maker_amount is valid
+            #   2. Verify size * price ≤ 5 dp; if not, reduce size by 0.01
+            #      until the product fits (max a handful of iterations)
+            # ---------------------------------------------------------------
+            from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+
+            # Round price to 4 dp (tick sizes are 0.01 or 0.001, never more)
+            price_d = Decimal(str(price)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
+
+            # USDC we want to spend, rounded to 2 dp
+            usdc_d = Decimal(str(copy_size)).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+
+            # Token size = USDC / price, rounded DOWN to 2 dp
+            size_d = (usdc_d / price_d).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+            if size_d <= Decimal('0'):
+                size_d = Decimal('0.01')
+
+            # Ensure taker_amount (size * price) fits in 5 dp
+            # Reduce size by 0.01 at a time until the product is clean
+            FIVE_DP = Decimal('0.00001')
+            for _ in range(10):
+                taker_d = (size_d * price_d).quantize(FIVE_DP, rounding=ROUND_DOWN)
+                if taker_d == size_d * price_d or abs((size_d * price_d) - taker_d) < Decimal('0.000001'):
+                    break
+                size_d -= Decimal('0.01')
+                if size_d <= Decimal('0'):
+                    size_d = Decimal('0.01')
+                    break
+
+            # Final clean values
+            price_f     = float(price_d)
+            size_tokens = float(size_d)
+            taker_f     = float((size_d * price_d).quantize(FIVE_DP, rounding=ROUND_DOWN))
+
             print(f"[Executor] Order params:")
             print(f"  Token ID: {token_id}")
-            print(f"  Price: {price:.4f}")
-            print(f"  Size: {size_tokens:.2f} tokens")
-            print(f"  Taker amount (USDC): ${taker_amount:.5f}")
+            print(f"  Price: {price_f:.4f}")
+            print(f"  Size: {size_tokens:.2f} tokens (~${float(usdc_d):.2f})")
             print(f"  Side: {side}")
             print(f"  Order Type: {order_type}")
-            
+
             # Create and post order
             if order_type == "FAK":
-                # Market order (Fill and Kill) - uses USDC amount directly
+                # MarketOrderArgs: market order spending a fixed USDC amount (max 2 dp)
                 try:
                     order_args = MarketOrderArgs(
                         token_id=token_id,
-                        amount=round(copy_size, 2),  # USDC amount, max 2 decimals
-                        side=side,
-                        price=price,
-                        fee_rate_bps=0
+                        amount=float(usdc_d),
+                        side=side
                     )
-                    
                     signed_order = self.client.create_market_order(order_args)
                     response = self.client.post_order(signed_order, OrderType.FAK)
                 except Exception as e:
-                    print(f"[Executor] FAK failed, trying GTC: {e}")
-                    # Fallback to GTC order
+                    print(f"[Executor] FAK market order failed ({e}), falling back to FOK limit order")
                     order_args = OrderArgs(
                         token_id=token_id,
-                        price=price,
+                        price=price_f,
                         size=size_tokens,
                         side=side
                     )
                     signed_order = self.client.create_order(order_args)
-                    response = self.client.post_order(signed_order, OrderType.GTC)
-                
+                    response = self.client.post_order(signed_order, OrderType.FOK)
+
             else:
-                # Limit order (Fill or Kill)
-                # For FOK, ensure amounts are within limits
+                # FOK limit order — price + size with strict decimal compliance
                 order_args = OrderArgs(
                     token_id=token_id,
-                    price=price,
+                    price=price_f,
                     size=size_tokens,
                     side=side
                 )
-                
                 signed_order = self.client.create_order(order_args)
                 response = self.client.post_order(signed_order, OrderType.FOK)
             

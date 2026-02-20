@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from dotenv import load_dotenv
 
-from auth import PolymarketAuth, setup_auth_from_env
-from trader_monitor import (
+from src.auth import PolymarketAuth, setup_auth_from_env
+from src.trader_monitor import (
     TraderMonitor, 
     TraderConfig, 
     Trade, 
@@ -44,8 +44,8 @@ from trader_monitor import (
     DataAPIClient,
     GammaAPIClient
 )
-from order_executor import OrderExecutor, CopyTradeConfig
-from websocket_client import PolymarketWebSocket
+from src.order_executor import OrderExecutor, CopyTradeConfig
+from src.websocket_client import PolymarketWebSocket
 
 
 # Configure logging
@@ -395,8 +395,8 @@ Examples:
         "--order-type",
         type=str,
         choices=["FOK", "FAK"],
-        default="FOK",
-        help="Order type: FOK (limit) or FAK (market)"
+        default=None,  # None = use value from .env (TYPE_ORDER)
+        help="Order type: FOK (limit) or FAK (market). Defaults to TYPE_ORDER in .env"
     )
     
     parser.add_argument(
