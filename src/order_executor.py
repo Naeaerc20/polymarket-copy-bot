@@ -258,28 +258,44 @@ class OrderExecutor:
             tick = float(tick_size)
             price = round(price / tick) * tick
             price = max(tick, min(price, 1.0 - tick))
-            price = round(price, 2)  # Round to 2 decimals for price
             
-            # Calculate size in tokens
-            size_tokens = copy_size / price
+            # For FOK orders, we need to be careful with decimals:
+            # - Maker amount (size): max 2 decimals
+            # - Taker amount (size * price): max 5 decimals
+            # Solution: Use Decimal for precise rounding
             
-            # Round size to 2 decimals (Polymarket requirement)
-            size_tokens = round(size_tokens, 2)
+            from decimal import Decimal, ROUND_DOWN
+            
+            # Convert to Decimal for precise arithmetic
+            price_decimal = Decimal(str(price)).quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
+            copy_size_decimal = Decimal(str(copy_size)).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+            
+            # Calculate size: must be max 2 decimals
+            size_decimal = (copy_size_decimal / price_decimal).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+            
+            # Convert back to float for the SDK
+            price = float(price_decimal)
+            size_tokens = float(size_decimal)
+            
+            # Verify taker amount (size * price) has max 5 decimals
+            taker_amount = size_decimal * price_decimal
+            taker_amount = float(taker_amount.quantize(Decimal('0.00001'), rounding=ROUND_DOWN))
             
             print(f"[Executor] Order params:")
             print(f"  Token ID: {token_id}")
-            print(f"  Price: {price:.2f}")
-            print(f"  Size: {size_tokens:.2f} tokens (~${copy_size:.2f})")
+            print(f"  Price: {price:.4f}")
+            print(f"  Size: {size_tokens:.2f} tokens")
+            print(f"  Taker amount (USDC): ${taker_amount:.5f}")
             print(f"  Side: {side}")
             print(f"  Order Type: {order_type}")
             
             # Create and post order
             if order_type == "FAK":
-                # Market order (Fill and Kill)
+                # Market order (Fill and Kill) - uses USDC amount directly
                 try:
                     order_args = MarketOrderArgs(
                         token_id=token_id,
-                        amount=copy_size,  # USDC amount for market orders
+                        amount=round(copy_size, 2),  # USDC amount, max 2 decimals
                         side=side,
                         price=price,
                         fee_rate_bps=0
@@ -301,6 +317,7 @@ class OrderExecutor:
                 
             else:
                 # Limit order (Fill or Kill)
+                # For FOK, ensure amounts are within limits
                 order_args = OrderArgs(
                     token_id=token_id,
                     price=price,
