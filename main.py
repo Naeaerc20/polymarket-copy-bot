@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from dotenv import load_dotenv
 
-from auth import PolymarketAuth, PolymarketCredentials, setup_auth_from_env
+from auth import PolymarketAuth, setup_auth_from_env
 from trader_monitor import (
     TraderMonitor, 
     TraderConfig, 
