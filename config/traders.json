@@ -1,0 +1,29 @@
+{
+  "traders": [
+    {
+      "address": "0x1234567890abcdef1234567890abcdef12345678",
+      "nickname": "ExampleTrader1",
+      "enabled": true,
+      "copy_buys": true,
+      "copy_sells": true,
+      "max_position_size": 500,
+      "notes": "Top performing trader - copy all trades"
+    },
+    {
+      "address": "0xabcdef1234567890abcdef1234567890abcdef12",
+      "nickname": "ExampleTrader2",
+      "enabled": true,
+      "copy_buys": true,
+      "copy_sells": false,
+      "max_position_size": 200,
+      "notes": "Only copy buy orders"
+    }
+  ],
+  "global_settings": {
+    "enabled": true,
+    "copy_delay_seconds": 1,
+    "max_concurrent_trades": 5,
+    "stop_on_error": false,
+    "notification_webhook": null
+  }
+}
