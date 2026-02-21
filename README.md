@@ -1,243 +1,327 @@
 # Polymarket Copy Trading Bot
 
-Bot automatizado de copy-trading para Polymarket que replica las operaciones de traders específicos en tiempo real.
+An automated **copy-trading bot for Polymarket** that mirrors trades from selected wallets in near real-time.
 
-## 🚀 Características
+> **Disclaimer:** This project is for educational purposes. Prediction-market trading involves risk. Never trade with money you can’t afford to lose.
 
-- **Seguimiento múltiple de traders**: Monitorea varios traders desde un archivo JSON
-- **Copia flexible**: Monto fijo o porcentaje del trade original
-- **Tipos de orden**: Soporte para FOK (Fill or Kill) y FAK (Fill and Kill/market)
-- **Autenticación L2**: Firma EIP-712 para transacciones seguras
-- **Monitoreo en tiempo real**: Solo copia trades NUEVOS (posteriores al inicio del bot)
-- **Configuración granular**: Control por trader de buys/sells y límites
-- **Setup automatizado**: Script de configuración que genera credenciales API
+---
 
-## 📋 Requisitos
+## Table of Contents
 
-- Python 3.9+
-- Cuenta en Polymarket con USDC en Polygon
-- Wallet address (proxy) y private key
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+  - [Step 1: Run the Setup Wizard](#step-1-run-the-setup-wizard)
+  - [Step 2: Configure Traders to Follow](#step-2-configure-traders-to-follow)
+  - [Environment Variables (.env)](#environment-variables-env)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Authentication Overview](#authentication-overview)
+- [Polymarket APIs](#polymarket-apis)
+- [Risks & Safety Notes](#risks--safety-notes)
+- [Troubleshooting](#troubleshooting)
+- [Logs](#logs)
+- [Workflow](#workflow)
+- [Contributing](#contributing)
+- [License](#license)
+- [Resources](#resources)
 
-## 🔧 Instalación
+---
+
+## Features
+
+- **Multi-trader tracking**: Monitor multiple traders from a JSON config file
+- **Flexible copy sizing**: Copy using a fixed USDC amount or a percentage of the original trade
+- **Order types**: Supports **FOK** (Fill or Kill) and **FAK** (market/Fill and Kill)
+- **L2 authentication**: EIP-712 signing flow for secure trading
+- **Real-time monitoring**: Copies **only new trades** (after bot startup)
+- **Granular controls**: Per-trader toggles for buys/sells, position limits, and notes
+- **Guided setup**: Setup wizard that derives and stores API credentials automatically
+
+---
+
+## Requirements
+
+- **Python 3.9+**
+- A **Polymarket account** funded with **USDC on Polygon**
+- Your **Polymarket proxy wallet address** (“portfolio address”) and **private key**
+- Basic CLI knowledge (PowerShell / Terminal)
+
+---
+
+## Installation
 
 ```bash
 cd polymarket-copy-bot
 pip install -r requirements.txt
 ```
 
-## ⚙️ Configuración
+**Recommended (virtual environment):**
+```bash
+python -m venv venv
+# Windows (PowerShell)
+.\venv\Scripts\Activate.ps1
+# macOS/Linux
+source venv/bin/activate
 
-### Paso 1: Ejecutar el Setup Wizard
+pip install -r requirements.txt
+```
+
+---
+
+## Configuration
+
+### Step 1: Run the Setup Wizard
 
 ```bash
 python setup.py
 ```
 
-El wizard te pedirá:
-1. **Private Key**: Tu clave privada de wallet (con o sin 0x)
-2. **Proxy Address**: Tu dirección de Polymarket (la que ves en tu portfolio)
-3. **Signature Type**: 
-   - `1` = Email/Google login (más común)
-   - `0` = MetaMask estándar
+The wizard will prompt you for:
+
+1. **Private Key**: Your wallet private key (with or without `0x`)
+2. **Proxy Address**: Your Polymarket proxy wallet address (the one shown in your portfolio)
+3. **Signature Type**
+   - `1` = Email/Google login (most common)
+   - `0` = Standard EOA / MetaMask
    - `2` = Gnosis Safe
-4. **Configuración de copy trading**: Monto fijo, porcentaje, tipo de orden, etc.
+4. **Copy-trading settings**: fixed amount, percentage, order type, limits, etc.
 
-El setup automáticamente:
-- ✓ Valida tus credenciales
-- ✓ Deriva las API keys de Polymarket
-- ✓ Guarda todo en `.env`
-- ✓ Verifica la conexión
+What setup does automatically:
 
-### Paso 2: Configurar traders a seguir
+- ✓ Validates your credentials
+- ✓ Derives Polymarket API keys
+- ✓ Saves everything to `.env`
+- ✓ Verifies connectivity
 
-Edita `config/traders.json`:
+---
+
+### Step 2: Configure Traders to Follow
+
+Edit `config/traders.json`:
 
 ```json
 {
   "traders": [
     {
-      "address": "0xdireccion_del_trader",
-      "nickname": "TraderExperto",
+      "address": "0xTRADER_WALLET_ADDRESS",
+      "nickname": "ProTrader",
       "enabled": true,
       "copy_buys": true,
       "copy_sells": true,
       "max_position_size": 500,
-      "notes": "Top performer en mercados políticos"
+      "notes": "High performer in political markets"
     }
   ]
 }
 ```
 
-**Cómo encontrar traders para seguir:**
-1. Ve a [Polymarket Leaderboard](https://polymarket.com/leaderboard)
-2. Ordena por Profit o Volume
-3. Haz clic en un trader y copia su wallet address de la URL o perfil
+**How to find traders to follow:**
+1. Open the Polymarket Leaderboard: https://polymarket.com/leaderboard  
+2. Sort by **Profit** or **Volume**
+3. Click a trader profile and copy the wallet address from the URL/profile
 
-### Variables de entorno (.env)
+---
 
-El setup crea automáticamente este archivo:
+### Environment Variables (.env)
+
+`setup.py` generates a `.env` file similar to:
 
 ```env
 # === WALLET CREDENTIALS ===
 PRIVATE_KEY=0x...
 
-# Tu dirección proxy de Polymarket
+# Your Polymarket proxy wallet address
 FUNDER_ADDRESS=0x...
 
-# Tipo de firma: 0=EOA, 1=POLY_PROXY, 2=GNOSIS_SAFE
-SIGNATURE_TYPE=1
+# Signature type: 0=EOA, 1=POLY_PROXY, 2=GNOSIS_SAFE
+SIGNATURE_TYPE=2
 
-# === API CREDENTIALS (Auto-generated) ===
+# === API CREDENTIALS (AUTO-GENERATED) ===
 POLY_API_KEY=...
 POLY_API_SECRET=...
 POLY_API_PASSPHRASE=...
 
 # === COPY TRADING SETTINGS ===
-AMOUNT_TO_COPY=50          # Cantidad fija en USDC
-COPY_SELL=true             # Copiar ventas
-PERCENTAGE_TO_COPY=100     # Porcentaje del trade original (o "null")
-TYPE_ORDER=FOK             # FOK o FAK
-MIN_TRADE_SIZE=10          # Mínimo en USDC
-MAX_TRADE_SIZE=1000        # Máximo en USDC
-POLL_INTERVAL=5            # Segundos entre verificaciones
+AMOUNT_TO_COPY=50          # Fixed USDC amount per trade
+COPY_SELL=true             # Whether to copy sells
+PERCENTAGE_TO_COPY=100     # % of original trade size (or "null" to disable)
+TYPE_ORDER=FOK             # FOK or FAK
+MIN_TRADE_SIZE=10          # Minimum USDC per copied trade
+MAX_TRADE_SIZE=1000        # Maximum USDC per copied trade
+POLL_INTERVAL=5            # Seconds between checks
 ```
 
-## 🏃 Uso
+**Important security note:** never commit `.env` to Git. Add this to `.gitignore`:
 
-### Modo de prueba (recomendado primero)
+```gitignore
+.env
+credentials.json
+logs/
+__pycache__/
+*.pyc
+```
+
+---
+
+## Usage
+
+### Dry-run mode (recommended first)
+
 ```bash
 python main.py --dry-run
 ```
 
-### Modo normal
+### Normal mode
+
 ```bash
 python main.py
 ```
 
-### Con opciones
+### Common options
+
 ```bash
-# Cantidad fija de $100 por trade
+# Copy a fixed $100 per trade
 python main.py --amount 100
 
-# Copiar 50% del tamaño del trade original
+# Copy 50% of the original trade size
 python main.py --percentage 50
 
-# Usar órdenes de mercado (FAK)
+# Use market-style orders (FAK)
 python main.py --order-type FAK
 
-# Con logging detallado
+# More verbose logging
 python main.py --log-level DEBUG
 ```
-
-## 📁 Estructura del Proyecto
-
-```
-polymarket-copy-bot/
-├── setup.py               # Setup wizard (ejecutar primero)
-├── main.py                # Punto de entrada principal
-├── requirements.txt       # Dependencias Python
-├── .env                   # Configuración (generado por setup.py)
-├── config/
-│   └── traders.json       # Lista de traders a seguir
-├── src/
-│   ├── auth.py            # Autenticación L1/L2
-│   ├── trader_monitor.py  # Monitoreo de actividad
-│   ├── order_executor.py  # Ejecución de órdenes
-│   ├── websocket_client.py # Cliente WebSocket
-│   └── utils.py           # Utilidades
-└── logs/                  # Archivos de log
-```
-
-## 🔐 Autenticación
-
-El bot usa un sistema de dos niveles:
-
-### Nivel 1 (L1) - Private Key
-- Se usa una sola vez para derivar credenciales API
-- Firma un mensaje EIP-712 para probar propiedad
-- Las credenciales se guardan en `.env` y `credentials.json`
-
-### Nivel 2 (L2) - API Credentials
-- Credenciales HMAC-SHA256 (apiKey, secret, passphrase)
-- Se usan para todas las operaciones de trading
-- El private key sigue siendo necesario para firmar órdenes
-
-## 📊 APIs de Polymarket
-
-| API | Endpoint | Uso |
-|-----|----------|-----|
-| **Gamma API** | `https://gamma-api.polymarket.com` | Metadata de mercados |
-| **CLOB API** | `https://clob.polymarket.com` | Trading, orderbook |
-| **Data API** | `https://data-api.polymarket.com` | Actividad de usuarios |
-
-## ⚠️ Riesgos y Advertencias
-
-1. **Riesgo financiero**: El copy trading puede resultar en pérdidas
-2. **Private key**: Nunca compartas tu private key ni subas `.env` a git
-3. **Latencia**: Puede haber delay entre el trade original y la copia
-4. **Dinero real**: Siempre prueba con `--dry-run` primero
-
-## 🛠️ Troubleshooting
-
-### Error: "Could not create/derive api key"
-- Verifica que tu PRIVATE_KEY sea correcta
-- Asegúrate de que el FUNDER_ADDRESS sea tu dirección proxy de Polymarket
-- Confirma que SIGNATURE_TYPE sea correcto (1 para Email/Google login)
-
-### Error: "Invalid signature"
-- SIGNATURE_TYPE incorrecto: usa 1 para cuentas de Email/Google
-
-### Error: "Insufficient balance"
-- Necesitas USDC en la red Polygon en tu wallet proxy
-
-### El bot detecta trades antiguos
-- El bot solo copia trades NUEVOS (posteriores a su inicio)
-- Los trades existentes se marcan como "vistos" durante la inicialización
-
-### No se detectan trades nuevos
-- Verifica que los traders tengan `enabled: true` en traders.json
-- Revisa que los traders tengan actividad reciente
-
-## 📝 Logs
-
-```bash
-# Ver logs en tiempo real
-tail -f logs/bot.log
-
-# Con nivel DEBUG para más detalle
-python main.py --log-level DEBUG
-```
-
-## 🔄 Flujo de Trabajo
-
-```
-1. Ejecutar setup.py → Genera .env con credenciales
-2. Editar traders.json → Agregar traders a seguir
-3. Ejecutar main.py --dry-run → Probar sin ejecutar trades
-4. Ejecutar main.py → Bot en funcionamiento
-   ├── Bot marca trades existentes como "vistos"
-   ├── Loop: Poll Data API cada X segundos
-   ├── Detecta trades NUEVOS (timestamp > inicio)
-   ├── Calcula tamaño según configuración
-   └── Ejecuta orden (si aplica)
-```
-
-## 🤝 Contribuir
-
-1. Fork el repositorio
-2. Crea una rama para tu feature
-3. Envía un pull request
-
-## 📄 Licencia
-
-MIT License
-
-## 🔗 Recursos
-
-- [Documentación de Polymarket](https://docs.polymarket.com/)
-- [py-clob-client (Python SDK)](https://github.com/Polymarket/py-clob-client)
-- [Polymarket Discord](https://discord.gg/polymarket)
 
 ---
 
-**⚠️ Disclaimer**: Este bot es para fines educativos. El trading de predicciones implica riesgos significativos. Nunca inviertas más de lo que puedes permitirte perder.
+## Project Structure
+
+```
+polymarket-copy-bot/
+├── setup.py                # Setup wizard (run first)
+├── main.py                 # Main entry point
+├── requirements.txt        # Python dependencies
+├── .env                    # Configuration (generated by setup.py)
+├── config/
+│   └── traders.json        # Traders to follow
+├── src/
+│   ├── auth.py             # L1/L2 auth utilities
+│   ├── trader_monitor.py   # Monitors trader activity
+│   ├── order_executor.py   # Places/executes orders
+│   ├── websocket_client.py # WebSocket client (if enabled)
+│   └── utils.py            # Helpers / utilities
+└── logs/                   # Log files
+```
+
+---
+
+## Authentication Overview
+
+The bot uses a two-layer flow:
+
+### Layer 1 (L1) — Private Key
+- Used to prove wallet ownership and derive API credentials
+- Signs an **EIP-712** message
+- Generated credentials are stored locally (e.g. `.env`, `credentials.json`)
+
+### Layer 2 (L2) — API Credentials
+- **HMAC-SHA256** credentials: `apiKey`, `secret`, `passphrase`
+- Used for most API requests
+- The private key may still be needed to sign orders depending on your setup
+
+---
+
+## Polymarket APIs
+
+| API | Base URL | Purpose |
+|---|---|---|
+| **Gamma API** | `https://gamma-api.polymarket.com` | Market metadata |
+| **CLOB API** | `https://clob.polymarket.com` | Trading & order book |
+| **Data API** | `https://data-api.polymarket.com` | User activity & events |
+
+---
+
+## Risks & Safety Notes
+
+1. **Financial risk:** Copy trading can lose money.
+2. **Private key security:** Never share your private key. Never upload `.env` to GitHub.
+3. **Latency & slippage:** There may be delay between the original trade and your copy.
+4. **Production use:** Always start with `--dry-run`, then use small sizes and strict limits.
+
+---
+
+## Troubleshooting
+
+### Error: `Could not create/derive api key`
+- Confirm `PRIVATE_KEY` is correct
+- Ensure `FUNDER_ADDRESS` is your **Polymarket proxy wallet address**
+- Verify `SIGNATURE_TYPE` (commonly `1` for Email/Google accounts)
+
+### Error: `Invalid signature`
+- Usually caused by a wrong `SIGNATURE_TYPE`
+- Try `SIGNATURE_TYPE=1` if your account uses Email/Google login
+
+### Error: `Insufficient balance`
+- Your proxy wallet needs enough **USDC on Polygon**
+
+### Bot is detecting old trades
+- The bot should only copy trades **after it starts**
+- Existing trades are marked as “seen” during initialization
+
+### No new trades detected
+- Confirm `enabled: true` in `config/traders.json`
+- Confirm the trader wallet has recent activity
+- Increase `POLL_INTERVAL` only if rate limiting occurs (otherwise keep it low)
+
+---
+
+## Logs
+
+```bash
+# Follow logs in real time
+tail -f logs/bot.log
+
+# Run with debug logging
+python main.py --log-level DEBUG
+```
+
+---
+
+## Workflow
+
+```
+1) Run setup.py       → Generates .env with credentials
+2) Edit traders.json  → Add/enable traders to follow
+3) Run dry-run        → python main.py --dry-run
+4) Run live           → python main.py
+   ├─ Bot marks existing trades as "seen"
+   ├─ Loop: poll Data API every X seconds
+   ├─ Detect new trades (timestamp > bot start)
+   ├─ Compute copy size (fixed or %)
+   └─ Execute order (if rules allow)
+```
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Open a pull request with a clear description
+
+---
+
+## License
+
+MIT License
+
+---
+
+## Resources
+
+- Polymarket Docs: https://docs.polymarket.com/
+- py-clob-client (Python SDK): https://github.com/Polymarket/py-clob-client
+- Polymarket Discord: https://discord.gg/polymarket
